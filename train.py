@@ -19,6 +19,8 @@ from dataset import MaskBaseDataset
 from loss import create_criterion
 from torchsampler import ImbalancedDatasetSampler
 
+from sklearn.metrics import f1_score
+
 # import nni
 # from nni.utils import merge_parameter
 
@@ -103,8 +105,8 @@ def train(data_dir, model_dir, args):
     num_classes = dataset.num_classes  # 18
 
     # -- augmentation
-    transform_train_module = getattr(import_module("dataset"), args.augmentation)  # default: BaseAugmentation
-    transform_train = transform_train_module(
+    transform_module = getattr(import_module("dataset"), args.augmentation)  # default: BaseAugmentation
+    transform_train = transform_module(
         resize=args.resize,
         mean=dataset.mean,
         std=dataset.std,
@@ -147,8 +149,9 @@ def train(data_dir, model_dir, args):
     ).to(device)
     model = torch.nn.DataParallel(model)
 
+    print(dataset.cls_num_list)
     # -- loss & metric
-    criterion = create_criterion(args.criterion)  # default: cross_entropy
+    criterion = create_criterion(args.criterion, dataset.cls_num_list["train"])  # default: cross_entropy
     opt_module = getattr(import_module("torch.optim"), args.optimizer)  # default: SGD
     optimizer = opt_module(
         filter(lambda p: p.requires_grad, model.parameters()),
@@ -164,6 +167,7 @@ def train(data_dir, model_dir, args):
 
     best_val_acc = 0
     best_val_loss = np.inf
+    best_f1_score = 0
     torch.cuda.empty_cache()
     for epoch in range(args.epochs):
         # train loop
@@ -171,6 +175,8 @@ def train(data_dir, model_dir, args):
         dataset.set_transform(transform_train)
         loss_value = 0
         matches = 0
+        y_true, y_pred = [], []
+
 
         for idx, train_batch in enumerate(train_loader):
             inputs, labels = train_batch
@@ -184,6 +190,9 @@ def train(data_dir, model_dir, args):
             preds = torch.argmax(outs, dim=-1)
             loss = criterion(outs, labels)
 
+            y_true.extend(labels.tolist()) # for f1 score
+            y_pred.extend(preds.tolist()) # for f1 score
+
             loss.backward()
             optimizer.step()
 
@@ -192,10 +201,12 @@ def train(data_dir, model_dir, args):
             if (idx + 1) % args.log_interval == 0:
                 train_loss = loss_value / args.log_interval
                 train_acc = matches / args.batch_size / args.log_interval
+                f1 = f1_score(y_pred, y_true, average='macro')
                 current_lr = get_lr(optimizer)
                 print(
                     f"Epoch[{epoch + 1}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
-                    f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} || lr {current_lr}"
+                    f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} || lr {current_lr} || "
+                    f"F1 score {f1:4.4}"
                 )
                 logger.add_scalar("Train/loss", train_loss, epoch * len(train_loader) + idx)
                 logger.add_scalar("Train/accuracy", train_acc, epoch * len(train_loader) + idx)
@@ -213,6 +224,7 @@ def train(data_dir, model_dir, args):
             val_loss_items = []
             val_acc_items = []
             figure = None
+            y_true, y_pred = [], []
 
             for val_batch in val_loader:
                 inputs, labels = val_batch
@@ -221,6 +233,9 @@ def train(data_dir, model_dir, args):
 
                 outs = model(inputs)
                 preds = torch.argmax(outs, dim=-1)
+
+                y_true.extend(labels.tolist())
+                y_pred.extend(preds.tolist())
 
                 loss_item = criterion(outs, labels).item()
                 acc_item = (labels == preds).sum().item()
@@ -236,16 +251,19 @@ def train(data_dir, model_dir, args):
 
             val_loss = np.sum(val_loss_items) / len(val_loader)
             val_acc = np.sum(val_acc_items) / len(val_set)
+            f1 = f1_score(y_pred, y_true, average='macro')
             
-            if val_acc > best_val_acc and val_loss < best_val_loss:
-                print(f"New best model for val accuracy : {val_acc:4.2%}! saving the best model..")
+            if f1 > best_f1_score: #val_acc > best_val_acc and val_loss < best_val_loss:
+                print(f"New best model for val f1 score : {f1:4.4}! saving the best model..")
                 torch.save(model.module.state_dict(), f"{save_dir}/best.pth")
                 best_val_acc = val_acc
                 best_val_loss = min(best_val_loss, val_loss)
+                best_f1_score = f1
             torch.save(model.module.state_dict(), f"{save_dir}/last.pth")
             print(
-                f"[Val] acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
-                f"best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2}"
+                f"[Val] acc : {val_acc:4.2%}, loss: {val_loss:4.2} F1 score: {f1:4.4} || "
+                f"best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2} || "
+                f"best F1 score {best_f1_score:4.4}"
             )
             logger.add_scalar("Val/loss", val_loss, epoch)
             logger.add_scalar("Val/accuracy", val_acc, epoch)

@@ -43,7 +43,7 @@ class LabelSmoothingLoss(nn.Module):
 
 # https://gist.github.com/SuperShinyEyes/dcc68a08ff8b615442e3bc6a9b55a354
 class F1Loss(nn.Module):
-    def __init__(self, classes=3, epsilon=1e-7):
+    def __init__(self, classes=18, epsilon=1e-7):
         super().__init__()
         self.classes = classes
         self.epsilon = epsilon
@@ -67,7 +67,7 @@ class F1Loss(nn.Module):
 
     
 class LDAMLoss(nn.Module):
-    def __init__(self, cls_num_list=[2780, 2050, 430, 3640, 4065, 535, 556, 410, 86, 728, 813, 107, 556, 410, 86, 728, 813, 107], max_m=0.5, weight=None, s=30):
+    def __init__(self, cls_num_list, max_m=0.5, weight=None, s=30): # =[2780, 2050, 430, 3640, 4065, 535, 556, 410, 86, 728, 813, 107, 556, 410, 86, 728, 813, 107]
         super(LDAMLoss, self).__init__()
         m_list = 1.0 / np.sqrt(np.sqrt(cls_num_list))
         m_list = m_list * (max_m / np.max(m_list))
@@ -106,10 +106,13 @@ def is_criterion(criterion_name):
     return criterion_name in _criterion_entrypoints
 
 
-def create_criterion(criterion_name, **kwargs):
+def create_criterion(criterion_name, cls_num_list, **kwargs):
     if is_criterion(criterion_name):
         create_fn = criterion_entrypoint(criterion_name)
-        criterion = create_fn(**kwargs)
+        if create_fn == LDAMLoss:
+            criterion = create_fn(cls_num_list = cls_num_list, **kwargs)
+        else:
+            criterion = create_fn(**kwargs)
     else:
         raise RuntimeError('Unknown loss (%s)' % criterion_name)
     return criterion

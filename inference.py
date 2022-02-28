@@ -61,7 +61,7 @@ def inference(data_dir, model_dir, output_dir, args):
             preds.extend(pred.cpu().numpy())
 
     info['ans'] = preds
-    info.to_csv(os.path.join(output_dir, f'output_tf_efficientnet_b5_ns_lr1e-5_LDAM.csv'), index=False)
+    info.to_csv(os.path.join(output_dir, f'output_tf_efficientnet_b5_ns_lr1e-5_f1.csv'), index=False)
     print(f'Inference Done!')
 
 

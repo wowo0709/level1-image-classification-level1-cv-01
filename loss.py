@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+
 # https://discuss.pytorch.org/t/is-this-a-correct-implementation-for-focal-loss-in-pytorch/43327/8
 class FocalLoss(nn.Module):
     def __init__(self, weight=None,
@@ -39,32 +40,10 @@ class LabelSmoothingLoss(nn.Module):
             true_dist.scatter_(1, target.data.unsqueeze(1), self.confidence)
         return torch.mean(torch.sum(-true_dist * pred, dim=self.dim))
 
-class LDAMLoss(nn.Module):
-    def __init__(self, cls_num_list, max_m=0.5, weight=None, s=30):
-        super(LDAMLoss, self).__init__()
-        m_list = 1.0 / np.sqrt(np.sqrt(cls_num_list))
-        m_list = m_list * (max_m / np.max(m_list))
-        m_list = torch.cuda.FloatTensor(m_list)
-        self.m_list = m_list
-        assert s > 0
-        self.s = s
-        self.weight = weight
-
-    def forward(self, x, target):
-        index = torch.zeros_like(x, dtype=torch.uint8)
-        index.scatter_(1, target.data.view(-1, 1), 1)
-        
-        index_float = index.type(torch.cuda.FloatTensor)
-        batch_m = torch.matmul(self.m_list[None, :], index_float.transpose(0,1))
-        batch_m = batch_m.view((-1, 1))
-        x_m = x - batch_m
-    
-        output = torch.where(index, x_m, x)
-        return F.cross_entropy(self.s*output, target, weight=self.weight)
 
 # https://gist.github.com/SuperShinyEyes/dcc68a08ff8b615442e3bc6a9b55a354
 class F1Loss(nn.Module):
-    def __init__(self, classes=3, epsilon=1e-7):
+    def __init__(self, classes=18, epsilon=1e-7):
         super().__init__()
         self.classes = classes
         self.epsilon = epsilon
@@ -86,12 +65,36 @@ class F1Loss(nn.Module):
         f1 = f1.clamp(min=self.epsilon, max=1 - self.epsilon)
         return 1 - f1.mean()
 
+    
+class LDAMLoss(nn.Module):
+    def __init__(self, cls_num_list, max_m=0.5, weight=None, s=30): # =[2780, 2050, 430, 3640, 4065, 535, 556, 410, 86, 728, 813, 107, 556, 410, 86, 728, 813, 107]
+        super(LDAMLoss, self).__init__()
+        m_list = 1.0 / np.sqrt(np.sqrt(cls_num_list))
+        m_list = m_list * (max_m / np.max(m_list))
+        m_list = torch.cuda.FloatTensor(m_list)
+        self.m_list = m_list
+        assert s > 0
+        self.s = s
+        self.weight = weight
+
+    def forward(self, x, target):
+        index = torch.zeros_like(x, dtype=torch.uint8)
+        index.scatter_(1, target.data.view(-1, 1), 1)
+        
+        index_float = index.type(torch.cuda.FloatTensor)
+        batch_m = torch.matmul(self.m_list[None, :], index_float.transpose(0,1))
+        batch_m = batch_m.view((-1, 1))
+        x_m = x - batch_m
+    
+        output = torch.where(index, x_m, x)
+        return F.cross_entropy(self.s*output, target, weight=self.weight)
 
 _criterion_entrypoints = {
     'cross_entropy': nn.CrossEntropyLoss,
     'focal': FocalLoss,
     'label_smoothing': LabelSmoothingLoss,
     'f1': F1Loss,
+    'LDAM' : LDAMLoss
 }
 
 
@@ -103,10 +106,13 @@ def is_criterion(criterion_name):
     return criterion_name in _criterion_entrypoints
 
 
-def create_criterion(criterion_name, **kwargs):
+def create_criterion(criterion_name, cls_num_list, **kwargs):
     if is_criterion(criterion_name):
         create_fn = criterion_entrypoint(criterion_name)
-        criterion = create_fn(**kwargs)
+        if create_fn == LDAMLoss:
+            criterion = create_fn(cls_num_list = cls_num_list, **kwargs)
+        else:
+            criterion = create_fn(**kwargs)
     else:
         raise RuntimeError('Unknown loss (%s)' % criterion_name)
     return criterion

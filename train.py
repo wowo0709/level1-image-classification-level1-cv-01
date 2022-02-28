@@ -274,11 +274,9 @@ def train(data_dir, model_dir, args):
             print()
 
         early_stop = EarlyStopping()(val_loss, model)
-        print(early_stop)
         if early_stop:
             print("early stop!!!")
             break
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

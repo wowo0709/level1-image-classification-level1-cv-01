@@ -164,6 +164,7 @@ def train(data_dir, model_dir, args):
     best_val_acc = 0
     best_val_loss = np.inf
     best_f1_score = 0
+    early_stop = EarlyStopping(name=args.name)
     for epoch in range(args.epochs):
         torch.cuda.empty_cache()
         # train loop
@@ -264,19 +265,18 @@ def train(data_dir, model_dir, args):
             torch.save(model.module.state_dict(), f"{save_dir}/last.pth")
             print(
                 f"[Val] || F1 score : {f1:4.4}, acc : {val_acc:4.2%}, loss: {val_loss:4.2} || \n"
-                f"best F1 score {best_f1_score:4.4}, best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2}"
+                f"[Val Best] best F1 score {best_f1_score:4.4}, best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2}"
             )
 
             logger.add_scalar("Val/loss", val_loss, epoch)
             logger.add_scalar("Val/accuracy", val_acc, epoch)
             logger.add_scalar("Val/F1", f1, epoch)
             logger.add_figure("results", figure, epoch)
-            print()
 
-        early_stop = EarlyStopping()(val_loss, model)
-        if early_stop:
+        if early_stop(val_loss, model):
             print("early stop!!!")
             break
+        print()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

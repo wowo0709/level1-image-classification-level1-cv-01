@@ -18,7 +18,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from dataset import MaskBaseDataset
 from loss import create_criterion
-#from torchsampler import ImbalancedDatasetSampler
+from early_stopping import EarlyStopping
 
 from sklearn.metrics import f1_score
 
@@ -102,7 +102,7 @@ def train(data_dir, model_dir, args):
     num_classes = dataset.num_classes  # 18
 
     # -- augmentation
-    transform_module = getattr(import_module("dataset"), args.augmentation)  # default: BaseAugmentation
+    transform_module = getattr(import_module("dataset"), args.augmentation)  # default: AlbuAugmentation
     transform_train = transform_module(
         resize=args.resize,
         mean=dataset.mean,
@@ -208,13 +208,12 @@ def train(data_dir, model_dir, args):
                 temp_matches = 0
 
         train_loss = loss_value / len(train_loader)
-        train_acc = matches / len(train_loader)
+        train_acc = matches / (args.batch_size *len(train_loader))
         f1 = f1_score(y_pred, y_true, average='macro')
         current_lr = get_lr(optimizer)
         print(
-            f"Epoch[{epoch+1}/{args.epochs}] || "
-            f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2} || lr {current_lr} ||"
-            f"F1 score {f1:4.4}"
+            f"Epoch[{epoch+1}/{args.epochs}] || F1 score {f1:4.4} || "
+            f"training accuracy {train_acc:4.2%} || training loss {train_loss:4.4} || lr {current_lr} || "
         )
         scheduler.step()
         torch.cuda.empty_cache()
@@ -259,21 +258,25 @@ def train(data_dir, model_dir, args):
             best_val_acc = max(best_val_acc, val_acc)
             best_val_loss = min(best_val_loss, val_loss)
             if f1 > best_f1_score: #val_acc > best_val_acc and val_loss < best_val_loss:
-                print(f"New best model for val f1 score : {f1:4.4}! saving the best model..")
+                print(f"----New best model for val f1 score : {f1:4.4}! saving the best model..----")
                 torch.save(model.module.state_dict(), f"{save_dir}/best.pth")
                 best_f1_score = f1
             torch.save(model.module.state_dict(), f"{save_dir}/last.pth")
             print(
-                f"[Val] acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
-                f"best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2} || "
-                f"best F1 score {best_f1_score:4.4}"
+                f"[Val] || F1 score : {f1:4.4}, acc : {val_acc:4.2%}, loss: {val_loss:4.2} || \n"
+                f"best F1 score {best_f1_score:4.4}, best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2}"
             )
+
             logger.add_scalar("Val/loss", val_loss, epoch)
             logger.add_scalar("Val/accuracy", val_acc, epoch)
             logger.add_scalar("Val/F1", f1, epoch)
             logger.add_figure("results", figure, epoch)
             print()
 
+        early_stop = EarlyStopping()(val_loss, model)
+        if early_stop:
+            print("early stop!!!")
+            break
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -282,7 +285,7 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42, help='random seed (default: 42)')
     parser.add_argument('--epochs', type=int, default=1, help='number of epochs to train (default: 1)')
     parser.add_argument('--dataset', type=str, default='MaskBaseDataset', help='dataset augmentation type (default: MaskBaseDataset)')
-    parser.add_argument('--augmentation', type=str, default='BaseAugmentation', help='data augmentation type (default: BaseAugmentation)')
+    parser.add_argument('--augmentation', type=str, default='AlbuAugmentation', help='data augmentation type (default: BaseAugmentation)')
     parser.add_argument("--resize", nargs="+", type=int, default=[384, 384], help='resize size for image when training')
     parser.add_argument('--batch_size', type=int, default=16, help='input batch size for training (default: 64)')
     parser.add_argument('--valid_batch_size', type=int, default=32, help='input batch size for validing (default: 1000)')
@@ -297,7 +300,7 @@ if __name__ == '__main__':
 
     # Container environment
     parser.add_argument('--data_dir', type=str, default=os.environ.get('SM_CHANNEL_TRAIN', '/opt/ml/input/data/train/images'))
-    parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR', './model'))
+    parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR', '/opt/ml/code/model'))
 
     args = parser.parse_args()
     print(args)

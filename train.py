@@ -18,7 +18,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from dataset import MaskBaseDataset
 from loss import create_criterion
-#from torchsampler import ImbalancedDatasetSampler
+from early_stopping import EarlyStopping
 
 from sklearn.metrics import f1_score
 
@@ -208,13 +208,12 @@ def train(data_dir, model_dir, args):
                 temp_matches = 0
 
         train_loss = loss_value / len(train_loader)
-        train_acc = matches / len(train_loader)
+        train_acc = matches / (args.batch_size *len(train_loader))
         f1 = f1_score(y_pred, y_true, average='macro')
         current_lr = get_lr(optimizer)
         print(
-            f"Epoch[{epoch+1}/{args.epochs}] || "
-            f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2} || lr {current_lr} ||"
-            f"F1 score {f1:4.4}"
+            f"Epoch[{epoch+1}/{args.epochs}] || F1 score {f1:4.4} || "
+            f"training accuracy {train_acc:4.2%} || training loss {train_loss:4.4} || lr {current_lr} || "
         )
         scheduler.step()
         torch.cuda.empty_cache()
@@ -259,26 +258,26 @@ def train(data_dir, model_dir, args):
             best_val_acc = max(best_val_acc, val_acc)
             best_val_loss = min(best_val_loss, val_loss)
             if f1 > best_f1_score: #val_acc > best_val_acc and val_loss < best_val_loss:
-                print(f"New best model for val f1 score : {f1:4.4}! saving the best model..")
+                print(f"----New best model for val f1 score : {f1:4.4}! saving the best model..----")
                 torch.save(model.module.state_dict(), f"{save_dir}/best.pth")
                 best_f1_score = f1
             torch.save(model.module.state_dict(), f"{save_dir}/last.pth")
             print(
-                f"[Val] acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
-                f"best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2} || "
-                f"best F1 score {best_f1_score:4.4}"
+                f"[Val] || F1 score : {f1:4.4}, acc : {val_acc:4.2%}, loss: {val_loss:4.2} || \n"
+                f"best F1 score {best_f1_score:4.4}, best acc : {best_val_acc:4.2%}, best loss: {best_val_loss:4.2}"
             )
-
-            early_stop = EarlyStopping()
-            if early_stop(val_loss, model):
-                print("early stop!!!")
-                break
 
             logger.add_scalar("Val/loss", val_loss, epoch)
             logger.add_scalar("Val/accuracy", val_acc, epoch)
             logger.add_scalar("Val/F1", f1, epoch)
             logger.add_figure("results", figure, epoch)
             print()
+
+        early_stop = EarlyStopping()(val_loss, model)
+        print(early_stop)
+        if early_stop:
+            print("early stop!!!")
+            break
 
 
 if __name__ == '__main__':
@@ -303,7 +302,7 @@ if __name__ == '__main__':
 
     # Container environment
     parser.add_argument('--data_dir', type=str, default=os.environ.get('SM_CHANNEL_TRAIN', '/opt/ml/input/data/train/images'))
-    parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR', '/opt/ml/model'))
+    parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR', '/opt/ml/code/model'))
 
     args = parser.parse_args()
     print(args)

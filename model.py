@@ -212,6 +212,27 @@ class tf_efficientnet_b5_ns(nn.Module):
         x = self.tf_efficientnet_b5_ns(x)
         return x
 
+class tf_efficientnet_b4_ns(nn.Module):
+    """
+    input size : 380 x 380
+    """
+    def __init__(self, num_classes):
+        super().__init__()
+        self.tf_efficientnet_b4_ns = timm.create_model('tf_efficientnet_b4_ns', pretrained = True, num_classes=num_classes)
+
+        
+#         torch.nn.init.xavier_uniform_(self.resnet152.fc.weight)
+#         stdv = 1. / math.sqrt(self.resnet152.fc.weight.size(1))
+#         self.resnet152.fc.bias.data.uniform_(-stdv, stdv)
+        
+    def forward(self, x):
+        """
+        1. 위에서 정의한 모델 아키텍쳐를 forward propagation 을 진행해주세요
+        2. 결과로 나온 output 을 return 해주세요
+        """
+        x = self.tf_efficientnet_b4_ns(x)
+        return x
+
 class efficientnet_b4(nn.Module):
     def __init__(self, num_classes):
         super().__init__()

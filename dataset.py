@@ -14,6 +14,8 @@ from torchvision.transforms import *
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
+from sklearn.model_selection import StratifiedKFold
+
 IMG_EXTENSIONS = [
     ".jpg", ".JPG", ".jpeg", ".JPEG", ".png",
     ".PNG", ".ppm", ".PPM", ".bmp", ".BMP",
@@ -85,7 +87,7 @@ class AlbuAugmentation:
     def __init__(self, resize, mean, std, **args):
         self.transform = A.Compose([
             A.HorizontalFlip(p=0.5),
-            A.CenterCrop(height = 450, width = 350, p=1),
+            A.CenterCrop(height = 380, width = 380, p=1),
             A.ColorJitter(p=0.8, brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
             A.Resize(height=resize[0], width=resize[1], interpolation = 1),
             A.Normalize(mean=mean, std=std),
@@ -99,7 +101,7 @@ class AlbuAugmentation:
 class AlbuAugmentationVal:
     def __init__(self, resize, mean, std, **args):
         self.transform = A.Compose([
-            A.CenterCrop(height = 450, width = 350),
+            A.CenterCrop(height = 380, width = 380),
             A.Resize(height=resize[0], width=resize[1], interpolation = 1),
             A.Normalize(mean=mean, std=std),
             ToTensorV2()
@@ -143,7 +145,7 @@ class AgeLabels(int, Enum):
 
         if value < 30:
             return cls.YOUNG
-        elif value < 60:
+        elif value <= 58:
             return cls.MIDDLE
         else:
             return cls.OLD
@@ -345,11 +347,96 @@ class MaskSplitByProfileDataset(MaskBaseDataset):
         return [Subset(self, indices) for phase, indices in self.indices.items()]
 
 
+class CrossValid(MaskBaseDataset):
+    """
+        train / val 나누는 기준을 이미지에 대해서 random 이 아닌
+        사람(profile)을 기준으로 나눕니다.
+        구현은 val_ratio 에 맞게 train / val 나누는 것을 이미지 전체가 아닌 사람(profile)에 대해서 진행하여 indexing 을 합니다
+        이후 `split_dataset` 에서 index 에 맞게 Subset 으로 dataset 을 분기합니다.
+    """
+
+    def __init__(self, data_dir, args, k_fold, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2, features=False):
+        self.indices = []
+        self.k_folds = k_fold
+        self.args = args
+        self.cls_num_list = [0 for _ in range(self.num_classes)]
+        self.feature = features
+        super().__init__(data_dir, mean, std, val_ratio)
+
+    def setup(self):
+        profiles = os.listdir(self.data_dir)
+        profiles = [profile for profile in profiles if not profile.startswith(".")]
+
+        self.train_data = np.array([[] for _ in range(len(profiles))])
+        self.gender_ages = np.array([0 for _ in range(len(profiles))])
+        for idx, profile in enumerate(profiles):
+            img_folder = os.path.join(self.data_dir, profile)
+            for file_name in os.listdir(img_folder):
+                _file_name, ext = os.path.splitext(file_name)
+                if _file_name not in self._file_names:  # "." 로 시작하는 파일 및 invalid 한 파일들은 무시합니다
+                    continue
+
+                img_path = os.path.join(self.data_dir, profile, file_name)  # (resized_data, 000004_male_Asian_54, mask1.jpg)
+                mask_label = self._file_names[_file_name]
+
+                id, gender, race, age = profile.split("_")
+                gender_label = GenderLabels.from_str(gender)
+                age_label = AgeLabels.from_number(age)
+
+                self.image_paths.append(img_path)
+                self.mask_labels.append(mask_label)
+                self.gender_labels.append(gender_label)
+                self.age_labels.append(age_label)
+
+                gender_age = gender_label * 3 + age_label
+            self.train_data[idx] = [gender_age]
+            self.gender_ages[idx] = gender_age
+
+
+    def split_dataset(self) -> List[Subset]:
+        skf = StratifiedKFold(n_splits=self.k_folds, shuffle=True, random_state=self.args.seed)
+        train_val_set = []
+        for train_index, val_index in skf.split(self.train_data, self.gender_ages):
+            train_indices = []
+            for train_idx in train_index:
+                for i in range(train_idx*7, train_idx*7+7):
+                    train_indices.append(i)
+            val_indices = []
+            for val_idx in val_index:
+                for i in range(val_idx*7, val_idx*7+7):
+                    val_indices.append(i)
+            train_val_set.append([Subset(self, train_indices), Subset(self, val_indices)])
+
+        return train_val_set
+
+    def __getitem__(self, index):
+        assert self.transform is not None, ".set_tranform 메소드를 이용하여 transform 을 주입해주세요"
+
+        image = self.read_image(index)
+        mask_label = self.get_mask_label(index)
+        gender_label = self.get_gender_label(index)
+        age_label = self.get_age_label(index)
+        multi_class_label = self.encode_multi_class(mask_label, gender_label, age_label)
+        
+        features_dict = {
+            "age" : age_label,
+            "gender" : gender_label,
+            "mask" : mask_label
+        }
+
+        image = np.array(image) # albumentation : numpy에서 동작
+        image_transform = self.transform(image=image) #albumentation은 여러 값이 들어갈 수 있기 때문에 image=image로 지정해줘야함  # torchvision : self.transform(image)
+        
+        if self.feature:
+            return image_transform, features_dict[self.feature]
+        else:
+            return image_transform, multi_class_label
+
 class TestDataset(Dataset):
     def __init__(self, img_paths, resize, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246)):
         self.img_paths = img_paths
         self.transform = A.Compose([
-            A.CenterCrop(height = 450, width = 350),
+            A.CenterCrop(height = 380, width = 380),
             A.Resize(height=resize[0], width=resize[1], interpolation = 1),
             A.Normalize(mean=mean, std=std),
             ToTensorV2()

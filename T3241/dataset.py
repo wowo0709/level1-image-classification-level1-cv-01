@@ -85,7 +85,8 @@ class AlbuAugmentation:
     def __init__(self, resize, mean, std, **args):
         self.transform = A.Compose([
             A.HorizontalFlip(p=0.5),
-            A.CenterCrop(height = 450, width = 350, p=1),
+            A.Rotate(limit=10),
+            A.CenterCrop(height = 350, width = 350, p=1),
             A.ColorJitter(p=0.8, brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
             A.Resize(height=resize[0], width=resize[1], interpolation = 1),
             A.Normalize(mean=mean, std=std),
@@ -99,7 +100,7 @@ class AlbuAugmentation:
 class AlbuAugmentationVal:
     def __init__(self, resize, mean, std, **args):
         self.transform = A.Compose([
-            A.CenterCrop(height = 450, width = 350),
+            A.CenterCrop(height = 350, width = 350),
             A.Resize(height=resize[0], width=resize[1], interpolation = 1),
             A.Normalize(mean=mean, std=std),
             ToTensorV2()
@@ -349,7 +350,7 @@ class TestDataset(Dataset):
     def __init__(self, img_paths, resize, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246)):
         self.img_paths = img_paths
         self.transform = A.Compose([
-            A.CenterCrop(height = 450, width = 350),
+            A.CenterCrop(height = 350, width = 350),
             A.Resize(height=resize[0], width=resize[1], interpolation = 1),
             A.Normalize(mean=mean, std=std),
             ToTensorV2()

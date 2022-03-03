@@ -140,10 +140,10 @@ class resnetrs420(nn.Module):
         x = self.resnetrs420(x)
         return x
 
-class vit_large_patch16_384(nn.Module):
+class vit_small_r26_s32_384(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
-        self.vit_large_patch16_384 = timm.create_model('vit_large_patch16_384', pretrained = True, num_classes=num_classes)
+        self.vit_large_patch16_384 = timm.create_model('vit_small_r26_s32_384', pretrained = True, num_classes=num_classes)
 
         
 #         torch.nn.init.xavier_uniform_(self.resnet152.fc.weight)
@@ -212,20 +212,57 @@ class tf_efficientnet_b5_ns(nn.Module):
         x = self.tf_efficientnet_b5_ns(x)
         return x
 
-class efficientnet_b4(nn.Module):
+
+class swin_small_224(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
-        self.efficientnet_b4 = timm.create_model('efficientnet_b4', pretrained = True, num_classes=num_classes)
-
-        
-#         torch.nn.init.xavier_uniform_(self.resnet152.fc.weight)
-#         stdv = 1. / math.sqrt(self.resnet152.fc.weight.size(1))
-#         self.resnet152.fc.bias.data.uniform_(-stdv, stdv)
-        
+        self.model = timm.create_model('swin_small_patch4_window7_224', pretrained=True, num_classes=18)
+    
     def forward(self, x):
-        """
-        1. 위에서 정의한 모델 아키텍쳐를 forward propagation 을 진행해주세요
-        2. 결과로 나온 output 을 return 해주세요
-        """
-        x = self.efficientnet_b4(x)
+        x = self.model(x)
+        return x
+
+class swin_large_224(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        self.model = timm.create_model('swin_large_patch4_window7_224', pretrained=True, num_classes=18)
+    
+    def forward(self, x):
+        x = self.model(x)
+        return x
+
+class swin_large_384(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        self.model = timm.create_model('swin_large_patch4_window12_384', pretrained=True, num_classes=18)
+    
+    def forward(self, x):
+        x = self.model(x)
+        return x
+
+class swin_base_patch4_384(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        self.model = timm.create_model('swin_base_patch4_window12_384', pretrained=True, num_classes=18)
+    
+    def forward(self, x):
+        x = self.model(x)
+        return x
+
+class efficientnetb4(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        self.model = timm.create_model('efficientnet_b4', pretrained=True, num_classes=18)
+    
+    def forward(self, x):
+        x = self.model(x)
+        return x
+
+class beit_base_patch16_384(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        self.model = timm.create_model('beit_base_patch16_384', pretrained=True, num_classes=18)
+    
+    def forward(self, x):
+        x = self.model(x)
         return x

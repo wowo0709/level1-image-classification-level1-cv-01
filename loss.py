@@ -106,7 +106,7 @@ def is_criterion(criterion_name):
     return criterion_name in _criterion_entrypoints
 
 
-def create_criterion(criterion_name, **kwargs):
+def create_criterion(criterion_name, cls_num_list, **kwargs):
     if is_criterion(criterion_name):
         create_fn = criterion_entrypoint(criterion_name)
         if create_fn == LDAMLoss:

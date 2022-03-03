@@ -237,7 +237,9 @@ class efficientnet_b4(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
         self.efficientnet_b4 = timm.create_model('efficientnet_b4', pretrained = True, num_classes=num_classes)
-
+    """
+    input size : 384 x 384
+    """
         
 #         torch.nn.init.xavier_uniform_(self.resnet152.fc.weight)
 #         stdv = 1. / math.sqrt(self.resnet152.fc.weight.size(1))
@@ -249,4 +251,24 @@ class efficientnet_b4(nn.Module):
         2. 결과로 나온 output 을 return 해주세요
         """
         x = self.efficientnet_b4(x)
+        return x
+        
+class xcit_tiny_24_p8_384_dist(nn.Module):
+    def __init__(self, num_classes):
+        super().__init__()
+        self.xcit_tiny_24_p8_384_dist = timm.create_model('xcit_tiny_24_p8_384_dist', pretrained = True, num_classes=num_classes)
+    """
+    input size : 384 x 384
+    """
+        
+#         torch.nn.init.xavier_uniform_(self.resnet152.fc.weight)
+#         stdv = 1. / math.sqrt(self.resnet152.fc.weight.size(1))
+#         self.resnet152.fc.bias.data.uniform_(-stdv, stdv)
+        
+    def forward(self, x):
+        """
+        1. 위에서 정의한 모델 아키텍쳐를 forward propagation 을 진행해주세요
+        2. 결과로 나온 output 을 return 해주세요
+        """
+        x = self.xcit_tiny_24_p8_384_dist(x)
         return x

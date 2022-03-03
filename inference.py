@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 
 from dataset import TestDataset, MaskBaseDataset
 from tqdm import tqdm
+from glob import glob
 
 def load_model(saved_model, num_classes, device):
     model_cls = getattr(import_module("model"), args.model)
@@ -65,7 +66,7 @@ def inference(data_dir, model_dir, output_dir, args):
     info.to_csv(os.path.join(output_dir, f'output_tf_efficientnet_b5_ns_lr1e-5_f1.csv'), index=False)
     print(f'Inference Done!')
 
-def CV_load_model(index, saved_model, num_classes, device):
+def CV_load_model(index, model_name, saved_model, num_classes, device):
     model_cls = getattr(import_module("model"), args.model)
     model = model_cls(
         num_classes=num_classes
@@ -75,8 +76,8 @@ def CV_load_model(index, saved_model, num_classes, device):
     # tar = tarfile.open(tarpath, 'r:gz')
     # tar.extractall(path=saved_model)
 
-    model_path = os.path.join(saved_model, f'best_fold{index+1}.pth')
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    # model_path = os.path.join(saved_model, f'best_fold{index+1}.pth')
+    model.load_state_dict(torch.load(saved_model, map_location=device))
 
     return model
 
@@ -93,7 +94,7 @@ def CV_inference(data_dir, model_dir, output_dir, args):
 
     fold_preds_list = []
     for idx in range(k_fold):
-        model = CV_load_model(idx, model_dir, num_classes, device).to(device)
+        model = CV_load_model(idx, args.model, model_dir, num_classes, device).to(device)
         model.eval()
 
         img_root = os.path.join(data_dir, 'images')
@@ -149,36 +150,44 @@ def multi_inference(data_dir, model_dir, output_dir, args):
         fold_preds_list = []
 
         model_dir_feature = model_dir + '_' + feature
-        print(model_dir)
-        for idx in range(k_fold):
-            model = CV_load_model(idx, model_dir_feature, num_classes, device).to(device)
-            model.eval()
+        model_dir_features = []
+        if feature == 'age':
+            model_dir_features.append(model_dir_feature)
+            model_dir_feature = model_dir_feature + '_temp'
+            model_dir_features.append(model_dir_feature)
+        else:
+            model_dir_features.append(model_dir_feature)
+        
+        for model_dir_feat in model_dir_features:
+            for idx in range(k_fold):
+                model = CV_load_model(idx, args.model, model_dir_feat, num_classes, device).to(device)
+                model.eval()
 
-            img_root = os.path.join(data_dir, 'images')
-            info_path = os.path.join(data_dir, 'info.csv')
-            info = pd.read_csv(info_path)
+                img_root = os.path.join(data_dir, 'face_images')
+                info_path = os.path.join(data_dir, 'info.csv')
+                info = pd.read_csv(info_path)
 
-            img_paths = [os.path.join(img_root, img_id) for img_id in info.ImageID]
-            dataset = TestDataset(img_paths, args.resize)
-            loader = torch.utils.data.DataLoader(
-                dataset,
-                batch_size=args.batch_size,
-                num_workers=6, # default : 8
-                shuffle=False,
-                pin_memory=use_cuda,
-                drop_last=False,
-            )
+                img_paths = [os.path.join(img_root, img_id) for img_id in info.ImageID]
+                dataset = TestDataset(img_paths, args.resize)
+                loader = torch.utils.data.DataLoader(
+                    dataset,
+                    batch_size=args.batch_size,
+                    num_workers=6, # default : 8
+                    shuffle=False,
+                    pin_memory=use_cuda,
+                    drop_last=False,
+                )
 
-            print(f"Calculating fold {idx+1} inference results..")
-            preds = []
-            with torch.no_grad():
-                for idx, images in enumerate(tqdm(loader)):
-                    images = images.to(device)
-                    pred = model(images)
-                    # pred = pred.argmax(dim=-1)
-                    preds.extend(pred.cpu().numpy())
-            fold_preds_list.append(np.array(preds))
-        print(fold_preds_list)
+                print(f"Calculating fold {idx+1} inference results..")
+                preds = []
+                with torch.no_grad():
+                    for idx, images in enumerate(tqdm(loader)):
+                        images = images.to(device)
+                        pred = model(images)
+                        # pred = pred.argmax(dim=-1)
+                        preds.extend(pred.cpu().numpy())
+                fold_preds_list.append(np.array(preds))
+
         fold_preds = np.zeros_like(fold_preds_list[0])
         for preds in fold_preds_list:
             fold_preds += preds
@@ -195,8 +204,83 @@ def multi_inference(data_dir, model_dir, output_dir, args):
     for preds in total_preds_list:
         total_preds += preds
     info['ans'] = total_preds
-    info.to_csv(os.path.join(output_dir, f'output_{args.model}_{args.learning}_lr1e-5.csv'), index=False)
+    info.to_csv(os.path.join(output_dir, f'output_{args.model}_{args.learning}_ensemble.csv'), index=False)
     print(f'multi Inference Done!')
+
+@torch.no_grad()
+def ensemble_inference(data_dir, ensemble_model_dir, ensemble_model_name, output_dir, args):
+    """
+    """
+    k_fold = 5
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda" if use_cuda else "cpu")
+
+    classes = [3, 2, 3]
+    features = ['age', 'gender', 'mask']
+    model_dir_list = []
+
+    total_preds_list = []
+    for feature, num_class in zip(features, classes):
+        print(f"-------{feature}-------")
+        num_classes = num_class
+        fold_preds_list = []
+        
+        for model_dir, model_name in zip(ensemble_model_dir, ensemble_model_name):
+            args.model = model_name
+            model_dir = os.path.join('/opt/ml/code/model', model_dir)
+            model_dir_feature = model_dir + '_' + feature
+            model_dir_list = sorted(glob(model_dir_feature + "/best*.pth"))
+            if not os.path.exists(model_dir_feature):
+                continue
+            print(f"[model_name : {model_name}]")
+            for idx, model_dir_feat in enumerate(model_dir_list):
+                model = CV_load_model(idx, model_name, model_dir_feat, num_classes, device).to(device)
+                model.eval()
+
+                img_root = os.path.join(data_dir, 'face_images')
+                info_path = os.path.join(data_dir, 'info.csv')
+                info = pd.read_csv(info_path)
+
+                img_paths = [os.path.join(img_root, img_id) for img_id in info.ImageID]
+                dataset = TestDataset(img_paths, args.resize)
+                loader = torch.utils.data.DataLoader(
+                    dataset,
+                    batch_size=args.batch_size,
+                    num_workers=6, # default : 8
+                    shuffle=False,
+                    pin_memory=use_cuda,
+                    drop_last=False,
+                )
+                f_name = model_dir_feat.split("/")[-1]
+                print(f"Calculating {f_name} inference results..")
+                preds = []
+                with torch.no_grad():
+                    for idx, images in enumerate(tqdm(loader)):
+                        images = images.to(device)
+                        pred = model(images)
+                        # pred = pred.argmax(dim=-1)
+                        preds.extend(pred.cpu().numpy())
+                fold_preds_list.append(np.array(preds))
+
+        fold_preds = np.zeros_like(fold_preds_list[0])
+        for preds in fold_preds_list:
+            fold_preds += preds
+        fold_preds = np.argmax(fold_preds, -1)
+        
+        if feature == 'gender':
+            fold_preds *= 3
+        elif feature == 'mask':
+            fold_preds *= 6
+
+        total_preds_list.append(np.array(fold_preds))
+
+    total_preds = np.zeros_like(total_preds_list[0])
+    for preds in total_preds_list:
+        total_preds += preds
+    info['ans'] = total_preds
+    info.to_csv(os.path.join(output_dir, f'output_multi_lr1e-5.csv'), index=False)
+    print(f'ensemble Inference Done!')
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -213,6 +297,10 @@ if __name__ == '__main__':
     parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_CHANNEL_MODEL', '/opt/ml/code/model'))
     parser.add_argument('--output_dir', type=str, default=os.environ.get('SM_OUTPUT_DATA_DIR', './output'))
 
+    parser.add_argument('--ensemble', type=bool, default=False, help='ensemble (default: False)')
+    parser.add_argument('--ensemble_model_dir', nargs='+', type=str, default=[], help='model_dir for ensemble')
+    parser.add_argument('--ensemble_model_name', nargs='+', type=str, default=[], help='model name for ensemble')
+
     args = parser.parse_args()
 
     data_dir = args.data_dir
@@ -225,5 +313,9 @@ if __name__ == '__main__':
         CV_inference(data_dir, model_dir, output_dir, args)
     elif args.learning == "multi":
         multi_inference(data_dir, model_dir, output_dir, args)
+    elif args.ensemble:
+        assert args.ensemble_model_dir, "앙상블에 사용할 ./model 하위 폴더명을 공백으로 구분해서 넣어주세요"
+        assert args.ensemble_model_name, "앙상블에 사용할 timm 모델명을 공백으로 구분해서 넣어주세요"
+        ensemble_inference(data_dir, args.ensemble_model_dir, args.ensemble_model_name, output_dir, args)
     else:
         inference(data_dir, model_dir, output_dir, args)

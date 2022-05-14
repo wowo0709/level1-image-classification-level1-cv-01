@@ -17,10 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from dataset import MaskBaseDataset
 from loss import create_criterion
-from torchsampler import ImbalancedDatasetSampler
 
-# import nni
-# from nni.utils import merge_parameter
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -96,34 +93,26 @@ def train(data_dir, model_dir, args):
     device = torch.device("cuda" if use_cuda else "cpu")
 
     # -- dataset
-    dataset_module = getattr(import_module("dataset"), args.dataset)  # default: MaskBase
+    dataset_module = getattr(import_module("dataset"), args.dataset)  # default: BaseAugmentation
     dataset = dataset_module(
         data_dir=data_dir,
     )
     num_classes = dataset.num_classes  # 18
 
     # -- augmentation
-    transform_train_module = getattr(import_module("dataset"), args.augmentation)  # default: BaseAugmentation
-    transform_train = transform_train_module(
+    transform_module = getattr(import_module("dataset"), args.augmentation)  # default: BaseAugmentation
+    transform = transform_module(
         resize=args.resize,
         mean=dataset.mean,
         std=dataset.std,
     )
-    
-    transform_val_module = getattr(import_module("dataset"), "AlbuAugmentationVal")
-    transform_val = transform_val_module(
-        resize=args.resize,
-        mean=dataset.mean,
-        std=dataset.std,
-    )
-    
-    
+    dataset.set_transform(transform)
+
     # -- data_loader
     train_set, val_set = dataset.split_dataset()
 
     train_loader = DataLoader(
         train_set,
-#         sampler=ImbalancedDatasetSampler(train_set),
         batch_size=args.batch_size,
         num_workers=multiprocessing.cpu_count()//2,
         shuffle=True,
@@ -164,17 +153,13 @@ def train(data_dir, model_dir, args):
 
     best_val_acc = 0
     best_val_loss = np.inf
-    torch.cuda.empty_cache()
     for epoch in range(args.epochs):
         # train loop
         model.train()
-        dataset.set_transform(transform_train)
         loss_value = 0
         matches = 0
-
         for idx, train_batch in enumerate(train_loader):
             inputs, labels = train_batch
-            
             inputs = inputs.to(device)
             labels = labels.to(device)
 
@@ -194,7 +179,7 @@ def train(data_dir, model_dir, args):
                 train_acc = matches / args.batch_size / args.log_interval
                 current_lr = get_lr(optimizer)
                 print(
-                    f"Epoch[{epoch + 1}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
+                    f"Epoch[{epoch}/{args.epochs}]({idx + 1}/{len(train_loader)}) || "
                     f"training loss {train_loss:4.4} || training accuracy {train_acc:4.2%} || lr {current_lr}"
                 )
                 logger.add_scalar("Train/loss", train_loss, epoch * len(train_loader) + idx)
@@ -206,14 +191,12 @@ def train(data_dir, model_dir, args):
         scheduler.step()
 
         # val loop
-        dataset.set_transform(transform_val)
         with torch.no_grad():
             print("Calculating validation results...")
             model.eval()
             val_loss_items = []
             val_acc_items = []
             figure = None
-
             for val_batch in val_loader:
                 inputs, labels = val_batch
                 inputs = inputs.to(device)
@@ -236,12 +219,11 @@ def train(data_dir, model_dir, args):
 
             val_loss = np.sum(val_loss_items) / len(val_loader)
             val_acc = np.sum(val_acc_items) / len(val_set)
-            
-            if val_acc > best_val_acc and val_loss < best_val_loss:
+            best_val_loss = min(best_val_loss, val_loss)
+            if val_acc > best_val_acc:
                 print(f"New best model for val accuracy : {val_acc:4.2%}! saving the best model..")
                 torch.save(model.module.state_dict(), f"{save_dir}/best.pth")
                 best_val_acc = val_acc
-                best_val_loss = min(best_val_loss, val_loss)
             torch.save(model.module.state_dict(), f"{save_dir}/last.pth")
             print(
                 f"[Val] acc : {val_acc:4.2%}, loss: {val_loss:4.2} || "
@@ -250,9 +232,7 @@ def train(data_dir, model_dir, args):
             logger.add_scalar("Val/loss", val_loss, epoch)
             logger.add_scalar("Val/accuracy", val_acc, epoch)
             logger.add_figure("results", figure, epoch)
-#             nni.report_intermediate_result(val_acc)
             print()
-#         nni.report_final_result(val_acc)
 
 
 if __name__ == '__main__':
@@ -267,7 +247,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=1, help='number of epochs to train (default: 1)')
     parser.add_argument('--dataset', type=str, default='MaskBaseDataset', help='dataset augmentation type (default: MaskBaseDataset)')
     parser.add_argument('--augmentation', type=str, default='BaseAugmentation', help='data augmentation type (default: BaseAugmentation)')
-    parser.add_argument("--resize", nargs="+", type=int, default=[384, 512], help='resize size for image when training')
+    parser.add_argument("--resize", nargs="+", type=list, default=[128, 96], help='resize size for image when training')
     parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
     parser.add_argument('--valid_batch_size', type=int, default=1000, help='input batch size for validing (default: 1000)')
     parser.add_argument('--model', type=str, default='BaseModel', help='model type (default: BaseModel)')

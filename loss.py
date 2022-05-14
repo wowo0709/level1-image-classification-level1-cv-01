@@ -25,7 +25,7 @@ class FocalLoss(nn.Module):
 
 
 class LabelSmoothingLoss(nn.Module):
-    def __init__(self, classes=3, smoothing=0.0, dim=-1):
+    def __init__(self, classes=18, smoothing=0.0, dim=-1):
         super(LabelSmoothingLoss, self).__init__()
         self.confidence = 1.0 - smoothing
         self.smoothing = smoothing
@@ -65,9 +65,28 @@ class F1Loss(nn.Module):
         f1 = f1.clamp(min=self.epsilon, max=1 - self.epsilon)
         return 1 - f1.mean()
 
-    
+'''
+0:	 83
+1:	 83
+2:	 109
+3:	 109
+4:	 410
+5:	 410
+6:	 415
+7:	 545
+8:	 556
+9:	 556
+10:	 725
+11:	 725
+12:	 817
+13:	 817
+14:	 2050
+15:	 2780
+16:	 3625
+17:	 4085
+'''
 class LDAMLoss(nn.Module):
-    def __init__(self, cls_num_list, max_m=0.5, weight=None, s=30): # =[2780, 2050, 430, 3640, 4065, 535, 556, 410, 86, 728, 813, 107, 556, 410, 86, 728, 813, 107]
+    def __init__(self, cls_num_list=[2780, 2050, 430, 3640, 4065, 535, 556, 410, 86, 728, 813, 107, 556, 410, 86, 728, 813, 107], max_m=0.5, weight=None, s=30):
         super(LDAMLoss, self).__init__()
         m_list = 1.0 / np.sqrt(np.sqrt(cls_num_list))
         m_list = m_list * (max_m / np.max(m_list))
@@ -89,12 +108,102 @@ class LDAMLoss(nn.Module):
         output = torch.where(index, x_m, x)
         return F.cross_entropy(self.s*output, target, weight=self.weight)
 
+
+class CustomLDAMLoss(nn.Module):
+    def __init__(self, cls_num_list=[2780, 2050, 430, 3640, 4065, 535, 556, 410, 86, 728, 813, 107, 556, 410, 86, 728, 813, 107], max_m=0.5, weight=None, s=30):
+        super(CustomLDAMLoss, self).__init__() # !!!
+        m_list = 1.0 / np.sqrt(cls_num_list) # !!!
+        m_list = m_list * (max_m / np.max(m_list))
+        m_list = torch.cuda.FloatTensor(m_list)
+        self.m_list = m_list
+        assert s > 0
+        self.s = s
+        self.weight = weight
+
+    def forward(self, x, target):
+        index = torch.zeros_like(x, dtype=torch.uint8)
+        index.scatter_(1, target.data.view(-1, 1), 1)
+        
+        index_float = index.type(torch.cuda.FloatTensor)
+        batch_m = torch.matmul(self.m_list[None, :], index_float.transpose(0,1))
+        batch_m = batch_m.view((-1, 1))
+        x_m = x - batch_m
+    
+        output = torch.where(index, x_m, x)
+        return F.cross_entropy(self.s*output, target, weight=self.weight)
+
+
+
+class WeightedCrossEntropyLoss(nn.Module):
+    """
+    Cross entropy with instance-wise weights. Leave `aggregate` to None to obtain a loss
+    vector of shape (batch_size,).
+    """
+    def __init__(self, aggregate='mean'):
+        super(WeightedCrossEntropyLoss, self).__init__()
+        assert aggregate in ['sum', 'mean', None]
+        self.aggregate = aggregate
+
+
+    def cross_entropy_with_weights(logits, target, weights=None):
+        def _log_sum_exp(x):
+            # See implementation detail in
+            # http://timvieira.github.io/blog/post/2014/02/11/exp-normalize-trick/
+            # b is a shift factor. see link.
+            # x.size() = [N, C]:
+            b, _ = torch.max(x, 1)
+            y = b + torch.log(torch.exp(x - b.expand_as(x)).sum(1))
+            # y.size() = [N, 1]. Squeeze to [N] and return
+            return y.squeeze(1)
+        def _class_select(logits, target):
+            # in numpy, this would be logits[:, target].
+            batch_size, num_classes = logits.size()
+            if target.is_cuda:
+                device = target.data.get_device()
+                one_hot_mask = torch.autograd.Variable(torch.arange(0, num_classes)
+                                                    .long()
+                                                    .repeat(batch_size, 1)
+                                                    .cuda(device)
+                                                    .eq(target.data.repeat(num_classes, 1).t()))
+            else:
+                one_hot_mask = torch.autograd.Variable(torch.arange(0, num_classes)
+                                                    .long()
+                                                    .repeat(batch_size, 1)
+                                                    .eq(target.data.repeat(num_classes, 1).t()))
+            return logits.masked_select(one_hot_mask)
+        
+        assert logits.dim() == 2
+        assert not target.requires_grad
+        target = target.squeeze(1) if target.dim() == 2 else target
+        assert target.dim() == 1
+        loss = _log_sum_exp(logits) - _class_select(logits, target)
+        if weights is not None:
+            # loss.size() = [N]. Assert weights has the same shape
+            assert list(loss.size()) == list(weights.size())
+            # Weight the loss
+            loss = loss * weights
+        return loss
+
+
+    def forward(self, input, target, weights=None):
+        if self.aggregate == 'sum':
+            return self.cross_entropy_with_weights(input, target, weights).sum()
+        elif self.aggregate == 'mean':
+            return self.cross_entropy_with_weights(input, target, weights).mean()
+        elif self.aggregate is None:
+            return self.cross_entropy_with_weights(input, target, weights)
+
+
+
+
 _criterion_entrypoints = {
     'cross_entropy': nn.CrossEntropyLoss,
     'focal': FocalLoss,
     'label_smoothing': LabelSmoothingLoss,
     'f1': F1Loss,
-    'LDAM' : LDAMLoss
+    'ldam': LDAMLoss,
+    'custom_ldam': CustomLDAMLoss,
+    'weighted_cross_entropy': WeightedCrossEntropyLoss
 }
 
 
@@ -109,10 +218,7 @@ def is_criterion(criterion_name):
 def create_criterion(criterion_name, **kwargs):
     if is_criterion(criterion_name):
         create_fn = criterion_entrypoint(criterion_name)
-        if create_fn == LDAMLoss:
-            criterion = create_fn(cls_num_list = cls_num_list, **kwargs)
-        else:
-            criterion = create_fn(**kwargs)
+        criterion = create_fn(**kwargs)
     else:
         raise RuntimeError('Unknown loss (%s)' % criterion_name)
     return criterion

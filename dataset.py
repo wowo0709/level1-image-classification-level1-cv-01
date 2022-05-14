@@ -11,9 +11,6 @@ from torch.utils.data import Dataset, Subset, random_split
 from torchvision import transforms
 from torchvision.transforms import *
 
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-
 IMG_EXTENSIONS = [
     ".jpg", ".JPG", ".jpeg", ".JPEG", ".png",
     ".PNG", ".ppm", ".PPM", ".bmp", ".BMP",
@@ -42,12 +39,16 @@ class AddGaussianNoise(object):
         직접 구현하여 사용할 수 있습니다.
     """
 
-    def __init__(self, mean=0, std=0.11):
+    def __init__(self, mean=0., std=1., p=0.5):
         self.std = std
         self.mean = mean
+        self.p = p
 
     def __call__(self, tensor):
-        return tensor + torch.randn(tensor.size()) * self.std + self.mean
+        if torch.rand(1)[0] < self.p:
+            return tensor + torch.randn(tensor.size()) * self.std + self.mean
+        else:
+            return tensor
 
     def __repr__(self):
         return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
@@ -67,46 +68,97 @@ class CustomAugmentation:
     def __call__(self, image):
         return self.transform(image)
 
-class MyAugmentation:
+
+class CustomAugmentation2:
     def __init__(self, resize, mean, std, **args):
         self.transform = transforms.Compose([
-            RandomCrop((416, 312)),
-            ColorJitter(0.04, 0.02, 0.03, 0.02),
-            Resize(resize, Image.BILINEAR),
+            # Resize(resize, Image.BILINEAR),
+            Resize(resize, Image.BICUBIC),
+            RandomCrop((300,300)),
+            RandomHorizontalFlip(p=0.5),
+            ColorJitter(0.1, 0.1, 0.1, 0.1),
             ToTensor(),
             Normalize(mean=mean, std=std),
-            AddGaussianNoise()
+            AddGaussianNoise(p=0.5)
         ])
 
     def __call__(self, image):
-        return self.transform(image)    
-    
-class AlbuAugmentation:
+        return self.transform(image)
+
+
+class CustomAugmentation3:
     def __init__(self, resize, mean, std, **args):
-        self.transform = A.Compose([
-            A.HorizontalFlip(p=0.5),
-            A.CenterCrop(height = 450, width = 350, p=1),
-            A.ColorJitter(p=0.8, brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
-            A.Resize(height=resize[0], width=resize[1], interpolation = 1),
-            A.Normalize(mean=mean, std=std),
-#             A.GaussNoise(p=0.5, var_limit=(0, 0.001)),
-            ToTensorV2()
+        self.transform = transforms.Compose([
+            # Resize(resize, Image.BILINEAR),
+            Resize(resize, Image.BICUBIC),
+            RandomCrop((300,300)),
+            RandomHorizontalFlip(p=0.5),
+            ColorJitter(0.5, 0.5, 0.5, 0.5),
+            ToTensor(),
+            Normalize(mean=mean, std=std),
+            AddGaussianNoise(p=0.3)
         ])
 
     def __call__(self, image):
-        return self.transform(image=image)["image"]
-    
-class AlbuAugmentationVal:
+        return self.transform(image)
+
+
+class CustomAugmentation4:
     def __init__(self, resize, mean, std, **args):
-        self.transform = A.Compose([
-            A.CenterCrop(height = 450, width = 350),
-            A.Resize(height=resize[0], width=resize[1], interpolation = 1),
-            A.Normalize(mean=mean, std=std),
-            ToTensorV2()
+        
+        self.transform = transforms.Compose([
+            # Resize(resize, Image.BILINEAR),
+            transforms.RandomApply([
+                Resize(resize, Image.BICUBIC),
+                RandomCrop((300,300)),
+            ], p=0.3),
+            CenterCrop((300,300)),
+            RandomHorizontalFlip(p=0.5),
+            ColorJitter(0.3, 0.3, 0.3, 0.3),
+            ToTensor(),
+            Normalize(mean=mean, std=std),
+            AddGaussianNoise(p=0.3) # p=0.2
         ])
 
     def __call__(self, image):
-        return self.transform(image=image)["image"]
+        return self.transform(image)
+
+
+class CustomAugmentation5:
+    def __init__(self, resize, mean, std, **args):
+        
+        self.transform = transforms.Compose([
+            # Resize(resize, Image.BILINEAR),
+            transforms.RandomApply([
+                Resize(resize, Image.BICUBIC),
+                CenterCrop((300,300)),
+            ], p=0.3),
+            Resize((300,300)),
+            RandomHorizontalFlip(p=0.5),
+            ColorJitter(0.3, 0.3, 0.3, 0.3),
+            ToTensor(),
+            Normalize(mean=mean, std=std),
+            AddGaussianNoise(p=0.3) # p=0.2
+        ])
+
+    def __call__(self, image):
+        return self.transform(image)
+
+
+class CustomAugmentation6:
+    def __init__(self, resize, mean, std, **args):
+        self.transform = transforms.Compose([
+            Resize(resize, Image.BICUBIC),
+            RandomHorizontalFlip(p=0.5),
+            ColorJitter(0.1, 0.1, 0.1, 0.1),
+            ToTensor(),
+            Normalize(mean=mean, std=std),
+        ])
+
+    def __call__(self, image):
+        return self.transform(image)
+
+
 
 class MaskLabels(int, Enum):
     MASK = 0
@@ -174,13 +226,8 @@ class MaskBaseDataset(Dataset):
         self.val_ratio = val_ratio
 
         self.transform = None
-        self.cls_num_list = {
-            "train": [0 for _ in range(self.num_classes)],
-            "val": [0 for _ in range(self.num_classes)]
-        }
         self.setup()
         self.calc_statistics()
-        
 
     def setup(self):
         profiles = os.listdir(self.data_dir)
@@ -231,9 +278,8 @@ class MaskBaseDataset(Dataset):
         gender_label = self.get_gender_label(index)
         age_label = self.get_age_label(index)
         multi_class_label = self.encode_multi_class(mask_label, gender_label, age_label)
-        
-        image = np.array(image) # albumentation : numpy에서 동작
-        image_transform = self.transform(image=image) #albumentation은 여러 값이 들어갈 수 있기 때문에 image=image로 지정해줘야함  # torchvision : self.transform(image)
+
+        image_transform = self.transform(image)
         return image_transform, multi_class_label
 
     def __len__(self):
@@ -302,7 +348,7 @@ class MaskSplitByProfileDataset(MaskBaseDataset):
         length = len(profiles)
         n_val = int(length * val_ratio)
 
-        val_indices = set(random.sample(range(length), k=n_val))
+        val_indices = set(random.choices(range(length), k=n_val))
         train_indices = set(range(length)) - val_indices
         return {
             "train": train_indices,
@@ -331,34 +377,201 @@ class MaskSplitByProfileDataset(MaskBaseDataset):
                     gender_label = GenderLabels.from_str(gender)
                     age_label = AgeLabels.from_number(age)
 
+                    # # 60대 이상 데이터 증폭
+                    # if mask_label != MaskLabels.MASK:
+                    #     for _ in range(3):
+                    #         self.image_paths.append(img_path)
+                    #         self.mask_labels.append(mask_label)
+                    #         self.gender_labels.append(gender_label)
+                    #         self.age_labels.append(age_label)
+                    #         self.indices[phase].append(cnt)
+                    #         cnt += 1
+                    # # 미착용/비정상 착용 데이터 증폭
+                    # if age_label == AgeLabels.OLD:
+                    #     for _ in range(3):
+                    #         self.image_paths.append(img_path)
+                    #         self.mask_labels.append(mask_label)
+                    #         self.gender_labels.append(gender_label)
+                    #         self.age_labels.append(age_label)
+                    #         self.indices[phase].append(cnt)
+                    #         cnt += 1
+                    # else:
+                    #     self.image_paths.append(img_path)
+                    #     self.mask_labels.append(mask_label)
+                    #     self.gender_labels.append(gender_label)
+                    #     self.age_labels.append(age_label)
+                    #     self.indices[phase].append(cnt)
+                    #     cnt += 1
+
                     self.image_paths.append(img_path)
                     self.mask_labels.append(mask_label)
                     self.gender_labels.append(gender_label)
                     self.age_labels.append(age_label)
-                    
-                    self.cls_num_list[phase][mask_label * 6 + gender_label * 3 + age_label] += 1 #
-                    
                     self.indices[phase].append(cnt)
-                    cnt += 1                                
+                    cnt += 1
+
                     
+
     def split_dataset(self) -> List[Subset]:
         return [Subset(self, indices) for phase, indices in self.indices.items()]
+
+
+
+class SplitByMaskDataset(MaskSplitByProfileDataset):
+    def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2):
+        super().__init__(data_dir, mean, std, val_ratio)
+        num_classes = 3
+
+    def setup(self):
+        profiles = os.listdir(self.data_dir)
+        profiles = [profile for profile in profiles if not profile.startswith(".")]
+        split_profiles = self._split_profile(profiles, self.val_ratio)
+
+        cnt = 0
+        for phase, indices in split_profiles.items():
+            for _idx in indices:
+                profile = profiles[_idx]
+                img_folder = os.path.join(self.data_dir, profile)
+                for file_name in os.listdir(img_folder):
+                    _file_name, ext = os.path.splitext(file_name)
+                    if _file_name not in self._file_names:  # "." 로 시작하는 파일 및 invalid 한 파일들은 무시합니다
+                        continue
+
+                    img_path = os.path.join(self.data_dir, profile, file_name)  # (resized_data, 000004_male_Asian_54, mask1.jpg)
+                    mask_label = self._file_names[_file_name]
+
+                    # id, gender, race, age = profile.split("_")
+                    # gender_label = GenderLabels.from_str(gender)
+                    # age_label = AgeLabels.from_number(age)
+
+                    self.image_paths.append(img_path)
+                    self.mask_labels.append(mask_label)
+                    # self.gender_labels.append(gender_label)
+                    # self.age_labels.append(age_label)
+                    self.indices[phase].append(cnt)
+                    cnt += 1
+
+    def __getitem__(self, index):
+        assert self.transform is not None, ".set_tranform 메소드를 이용하여 transform 을 주입해주세요"
+
+        image = self.read_image(index)
+        mask_label = self.get_mask_label(index)
+        # gender_label = self.get_gender_label(index)
+        # age_label = self.get_age_label(index)
+        # multi_class_label = self.encode_multi_class(mask_label, gender_label, age_label)
+
+        image_transform = self.transform(image)
+        return image_transform, mask_label
+
+
+
+class SplitByGenderDataset(MaskSplitByProfileDataset):
+    def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2):
+        super().__init__(data_dir, mean, std, val_ratio)
+        num_classes = 2
+
+    def setup(self):
+        profiles = os.listdir(self.data_dir)
+        profiles = [profile for profile in profiles if not profile.startswith(".")]
+        split_profiles = self._split_profile(profiles, self.val_ratio)
+
+        cnt = 0
+        for phase, indices in split_profiles.items():
+            for _idx in indices:
+                profile = profiles[_idx]
+                img_folder = os.path.join(self.data_dir, profile)
+                for file_name in os.listdir(img_folder):
+                    _file_name, ext = os.path.splitext(file_name)
+                    if _file_name not in self._file_names:  # "." 로 시작하는 파일 및 invalid 한 파일들은 무시합니다
+                        continue
+
+                    img_path = os.path.join(self.data_dir, profile, file_name)  # (resized_data, 000004_male_Asian_54, mask1.jpg)
+                    # mask_label = self._file_names[_file_name]
+
+                    id, gender, race, age = profile.split("_")
+                    gender_label = GenderLabels.from_str(gender)
+                    # age_label = AgeLabels.from_number(age)
+
+                    self.image_paths.append(img_path)
+                    # self.mask_labels.append(mask_label)
+                    self.gender_labels.append(gender_label)
+                    # self.age_labels.append(age_label)
+                    self.indices[phase].append(cnt)
+                    cnt += 1
+
+    def __getitem__(self, index):
+        assert self.transform is not None, ".set_tranform 메소드를 이용하여 transform 을 주입해주세요"
+
+        image = self.read_image(index)
+        # mask_label = self.get_mask_label(index)
+        gender_label = self.get_gender_label(index)
+        # age_label = self.get_age_label(index)
+        # multi_class_label = self.encode_multi_class(mask_label, gender_label, age_label)
+
+        image_transform = self.transform(image)
+        return image_transform, gender_label
+
+class SplitByAgeDataset(MaskSplitByProfileDataset):
+    def __init__(self, data_dir, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246), val_ratio=0.2):
+        super().__init__(data_dir, mean, std, val_ratio)
+        num_classes = 3
+
+    def setup(self):
+        profiles = os.listdir(self.data_dir)
+        profiles = [profile for profile in profiles if not profile.startswith(".")]
+        split_profiles = self._split_profile(profiles, self.val_ratio)
+
+        cnt = 0
+        for phase, indices in split_profiles.items():
+            for _idx in indices:
+                profile = profiles[_idx]
+                img_folder = os.path.join(self.data_dir, profile)
+                for file_name in os.listdir(img_folder):
+                    _file_name, ext = os.path.splitext(file_name)
+                    if _file_name not in self._file_names:  # "." 로 시작하는 파일 및 invalid 한 파일들은 무시합니다
+                        continue
+
+                    img_path = os.path.join(self.data_dir, profile, file_name)  # (resized_data, 000004_male_Asian_54, mask1.jpg)
+                    # mask_label = self._file_names[_file_name]
+
+                    id, gender, race, age = profile.split("_")
+                    # gender_label = GenderLabels.from_str(gender)
+                    age_label = AgeLabels.from_number(age)
+
+                    self.image_paths.append(img_path)
+                    # self.mask_labels.append(mask_label)
+                    # self.gender_labels.append(gender_label)
+                    self.age_labels.append(age_label)
+                    self.indices[phase].append(cnt)
+                    cnt += 1
+
+    def __getitem__(self, index):
+        assert self.transform is not None, ".set_tranform 메소드를 이용하여 transform 을 주입해주세요"
+
+        image = self.read_image(index)
+        # mask_label = self.get_mask_label(index)
+        # gender_label = self.get_gender_label(index)
+        age_label = self.get_age_label(index)
+        # multi_class_label = self.encode_multi_class(mask_label, gender_label, age_label)
+
+        image_transform = self.transform(image)
+        return image_transform, age_label
 
 
 class TestDataset(Dataset):
     def __init__(self, img_paths, resize, mean=(0.548, 0.504, 0.479), std=(0.237, 0.247, 0.246)):
         self.img_paths = img_paths
-        self.transform = A.Compose([
-            A.CenterCrop(height = 450, width = 350),
-            A.Resize(height=resize[0], width=resize[1], interpolation = 1),
-            A.Normalize(mean=mean, std=std),
-            ToTensorV2()
+        self.transform = transforms.Compose([
+            Resize(resize, Image.BICUBIC),
+            ToTensor(),
+            Normalize(mean=mean, std=std),
         ])
+
     def __getitem__(self, index):
         image = Image.open(self.img_paths[index])
-        image = np.array(image)
+
         if self.transform:
-            image = self.transform(image=image)["image"]
+            image = self.transform(image)
         return image
 
     def __len__(self):

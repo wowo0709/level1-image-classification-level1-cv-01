@@ -19,8 +19,28 @@ def load_model(saved_model, num_classes, device):
     # tar = tarfile.open(tarpath, 'r:gz')
     # tar.extractall(path=saved_model)
 
-    model_path = os.path.join(saved_model, 'best.pth')
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    try:
+        model_path = os.path.join(saved_model, 'best.pth')
+        model.load_state_dict(torch.load(model_path, map_location=device))
+    except: # module. prefix -> nn.Parallel
+        model = torch.nn.DataParallel(model)
+        model_path = os.path.join(saved_model, 'best.pth')
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        # Or you can try like, 
+        '''
+        # original saved file with DataParallel
+        state_dict = torch.load('myfile.pth.tar')
+        # create new OrderedDict that does not contain `module.`
+        from collections import OrderedDict
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:] # remove `module.`
+            new_state_dict[name] = v
+        # load params
+        model.load_state_dict(new_state_dict)
+        '''
+
+
 
     return model
 
@@ -45,7 +65,7 @@ def inference(data_dir, model_dir, output_dir, args):
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=args.batch_size,
-        num_workers=6, # default : 8
+        num_workers=8,
         shuffle=False,
         pin_memory=use_cuda,
         drop_last=False,
@@ -61,7 +81,8 @@ def inference(data_dir, model_dir, output_dir, args):
             preds.extend(pred.cpu().numpy())
 
     info['ans'] = preds
-    info.to_csv(os.path.join(output_dir, f'output_tf_efficientnet_b5_ns_lr1e-5_f1.csv'), index=False)
+    nickname = args.model_dir.split('/')[-2]
+    info.to_csv(os.path.join(output_dir, f'{nickname}_output.csv'), index=False)
     print(f'Inference Done!')
 
 
@@ -69,9 +90,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     # Data and model checkpoints directories
-    parser.add_argument('--batch_size', type=int, default=1000, help='input batch size for validing (default: 1000)')
-    parser.add_argument('--resize', nargs="+", type=int, default=(384, 512), help='resize size for image when you trained (default: (96, 128))')
-    parser.add_argument('--model', type=str, default='BaseModel', help='model type (default: BaseModel)')
+    parser.add_argument('--batch_size', type=int, default=32, help='input batch size for validing (default: 1000)')
+    parser.add_argument('--resize', nargs="+", type=int, default=[300, 300], help='resize size for image when you trained (default: (96, 128))')
+    parser.add_argument('--model', type=str, default='TimmEfficientNetB3', help='model type (default: BaseModel)')
 
     # Container environment
     parser.add_argument('--data_dir', type=str, default=os.environ.get('SM_CHANNEL_EVAL', '/opt/ml/input/data/eval'))
